@@ -1,17 +1,14 @@
 // Enhanced Particle System Implementation
 // Based on CFD principles and visualization design
 
-function createEnhancedParticles() {
-    // Remove existing particles if any
-    for (let i = 0; i < particles.length; i++) {
-        scene.remove(particles[i]);
-    }
-    particles = [];
+// Creates and returns an array of particle objects
+function createEnhancedParticles(scene, simParams, isMobile) {
+    const newParticles = []; // Create a local array
     
     // Calculate particle count based on room volume with significantly increased density
-    const length = parseFloat(roomLength.value);
-    const width = parseFloat(roomWidth.value);
-    const height = parseFloat(roomHeight.value);
+    const length = simParams.roomLength;
+    const width = simParams.roomWidth;
+    const height = simParams.roomHeight;
     const room_volume = length * width * height;
     const base_room_volume = 3000;
     const base_particle_count = 5000; // Doubled from 2500 to 5000 for higher density
@@ -21,14 +18,15 @@ function createEnhancedParticles() {
     let particle_count = Math.min(15000 * mobileFactor, Math.max(3000 * mobileFactor, 
         Math.floor(base_particle_count * mobileFactor * (room_volume / base_room_volume))));
     
-    particleCountElement.textContent = particle_count;
+    // Note: particleCountElement is a DOM element, update should happen in index.html
+    // particleCountElement.textContent = particle_count; 
     
     // Get fan parameters for proper distribution
-    const diameter = parseFloat(fanDiameter.value);
+    const diameter = simParams.fanDiameter;
     const radius = diameter / 2;
-    const fan_height_from_floor = parseFloat(fanHeight.value);
-    const cfm = parseFloat(fanCFM.value);
-    const rpm = parseFloat(fanRPM.value);
+    const fan_height_from_floor = simParams.fanHeight;
+    const cfm = simParams.fanCFM;
+    const rpm = simParams.fanRPM;
     
     // Create particle geometry with different sizes based on position
     // Base geometry is smaller for higher density without visual clutter
@@ -153,7 +151,7 @@ function createEnhancedParticles() {
         
         // Initial velocity with improved physics based on CFD principles
         // Direction and magnitude vary based on position
-        initializeParticleVelocity(particle, fan_height_from_floor, rpm, cfm, diameter);
+        initializeParticleVelocity(particle, simParams); // Pass simParams down
         
         // Particle properties for enhanced visualization
         particle.age = Math.floor(Math.random() * 100);
@@ -165,20 +163,31 @@ function createEnhancedParticles() {
         
         // Add to scene
         scene.add(particle);
-        particles.push(particle);
+        newParticles.push(particle); // Add to the local array
     }
+    
+    return newParticles; // Return the newly created array
 }
 
 // Helper function to initialize particle velocity based on position and fan parameters
-function initializeParticleVelocity(particle, fan_height, rpm, cfm, diameter) {
-    const direction = rotationDirection.value === 'forward' ? -1 : 1;
+function initializeParticleVelocity(particle, simParams) { // Accept simParams
+    const direction = simParams.rotationDirection === 'forward' ? -1 : 1;
+    const rpm = simParams.fanRPM;
     const speedFactor = rpm / 200;
+    const diameter = simParams.fanDiameter;
     const radius = diameter / 2;
+    const fan_height = simParams.fanHeight;
+    const cfm = simParams.fanCFM;
+    const roomWidth = simParams.roomWidth;
+    const roomLength = simParams.roomLength;
+    const roomHeight = simParams.roomHeight;
+    const epsilon = 1e-6; // Small value to prevent division by zero
     
     // Calculate distance from fan center (horizontal plane)
     const dx = particle.position.x;
     const dz = particle.position.z;
-    const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+    const horizontalDistanceSq = dx * dx + dz * dz;
+    const horizontalDistance = Math.sqrt(horizontalDistanceSq);
     
     // Calculate vertical distance from fan
     const verticalDistance = Math.abs(particle.position.y - fan_height);
@@ -199,7 +208,7 @@ function initializeParticleVelocity(particle, fan_height, rpm, cfm, diameter) {
         // Near fan blades - strong directional velocity with tangential component
         
         // Calculate tangential velocity component based on distance from center and RPM
-        const tangentialSpeed = (rpm / 60) * 2 * Math.PI * (horizontalDistance / radius);
+        const tangentialSpeed = (rpm / 60) * 2 * Math.PI * (horizontalDistance / (radius + epsilon)); // Added epsilon
         
         // Tangential component (perpendicular to radius)
         const tangentialVx = -Math.sin(angle) * tangentialSpeed * 0.02;
@@ -212,73 +221,78 @@ function initializeParticleVelocity(particle, fan_height, rpm, cfm, diameter) {
         
         // Combine components with direction
         vx = tangentialVx + (Math.random() - 0.5) * 0.01;
-        vy = direction * axialMagnitude * (1 - (horizontalDistance / radius) * 0.3);
+        vy = direction * axialMagnitude * (1 - (horizontalDistance / (radius + epsilon)) * 0.3); // Added epsilon
         vz = tangentialVz + (Math.random() - 0.5) * 0.01;
         
     } else if (particle.position.y < 0.2) {
         // Floor level - radial outward flow in forward mode, inward in reverse
         const dirFactor = direction < 0 ? 1 : -1; // Outward in forward mode, inward in reverse
-        const distanceFromCenter = Math.sqrt(dx * dx + dz * dz);
-        const dirX = dx / (distanceFromCenter + 0.001); // Avoid division by zero
-        const dirZ = dz / (distanceFromCenter + 0.001);
-        
-        // Velocity magnitude decreases with distance from center in forward mode
-        const distanceFactor = direction < 0 ? 
-            Math.max(0.4, 1 - distanceFromCenter / (Math.min(roomWidth.value, roomLength.value) / 2)) : 
-            Math.min(1.5, 0.5 + distanceFromCenter / (Math.min(roomWidth.value, roomLength.value) / 4));
-        
-        vx = dirFactor * dirX * baseMagnitude * distanceFactor * speedFactor;
+        if (horizontalDistanceSq > epsilon) { // Check distance before dividing
+            const dirX = dx / horizontalDistance;
+            const dirZ = dz / horizontalDistance;
+            
+            // Velocity magnitude decreases with distance from center in forward mode
+            const distanceFactor = direction < 0 ? 
+                Math.max(0.4, 1 - horizontalDistance / (Math.min(roomWidth, roomLength) / 2 + epsilon)) : // Added epsilon
+                Math.min(1.5, 0.5 + horizontalDistance / (Math.min(roomWidth, roomLength) / 4 + epsilon)); // Added epsilon
+            
+            vx = dirFactor * dirX * baseMagnitude * distanceFactor * speedFactor;
+            vz = dirFactor * dirZ * baseMagnitude * distanceFactor * speedFactor;
+        }
         vy = 0.001 + Math.random() * 0.003; // Slight upward component
-        vz = dirFactor * dirZ * baseMagnitude * distanceFactor * speedFactor;
         
-    } else if (particle.position.y > parseFloat(roomHeight.value) * 0.9) {
+    } else if (particle.position.y > roomHeight * 0.9) {
         // Ceiling level - radial inward flow in forward mode, outward in reverse
         const dirFactor = direction < 0 ? -1 : 1; // Inward in forward mode, outward in reverse
-        const distanceFromCenter = Math.sqrt(dx * dx + dz * dz);
-        const dirX = dx / (distanceFromCenter + 0.001);
-        const dirZ = dz / (distanceFromCenter + 0.001);
-        
-        // Velocity magnitude increases as particles get closer to fan in forward mode
-        const distanceFactor = direction < 0 ? 
-            Math.min(1.5, 0.5 + (radius * 2 - Math.min(distanceFromCenter, radius * 2)) / (radius * 2)) : 
-            Math.max(0.4, 1 - distanceFromCenter / (Math.min(roomWidth.value, roomLength.value) / 2));
-        
-        vx = dirFactor * dirX * baseMagnitude * distanceFactor * speedFactor * 0.7; // Slower at ceiling
+        if (horizontalDistanceSq > epsilon) { // Check distance before dividing
+            const dirX = dx / horizontalDistance;
+            const dirZ = dz / horizontalDistance;
+            
+            // Velocity magnitude increases as particles get closer to fan in forward mode
+            const distanceFactor = direction < 0 ? 
+                Math.min(1.5, 0.5 + (radius * 2 - Math.min(horizontalDistance, radius * 2)) / (radius * 2 + epsilon)) : // Added epsilon
+                Math.max(0.4, 1 - horizontalDistance / (Math.min(roomWidth, roomLength) / 2 + epsilon)); // Added epsilon
+            
+            vx = dirFactor * dirX * baseMagnitude * distanceFactor * speedFactor * 0.7; // Slower at ceiling
+            vz = dirFactor * dirZ * baseMagnitude * distanceFactor * speedFactor * 0.7;
+        }
         vy = -0.001 - Math.random() * 0.002; // Slight downward component
-        vz = dirFactor * dirZ * baseMagnitude * distanceFactor * speedFactor * 0.7;
         
     } else {
         // Mid-room - transitional flow
         // Direction depends on height and horizontal position
-        const heightRatio = particle.position.y / parseFloat(roomHeight.value);
-        const distanceFromCenter = Math.sqrt(dx * dx + dz * dz);
-        const dirX = dx / (distanceFromCenter + 0.001);
-        const dirZ = dz / (distanceFromCenter + 0.001);
-        
+        const heightRatio = particle.position.y / (roomHeight + epsilon); // Added epsilon
+        if (horizontalDistanceSq > epsilon) { // Check distance before dividing
+            const dirX = dx / horizontalDistance;
+            const dirZ = dz / horizontalDistance;
+            
+            if (direction < 0) { // Forward mode
+                if (heightRatio < 0.5) {
+                    // Lower half - generally outward and slightly upward
+                    vx = dirX * baseMagnitude * speedFactor * 0.5;
+                    vz = dirZ * baseMagnitude * speedFactor * 0.5;
+                } else {
+                    // Upper half - generally inward and slightly downward
+                    vx = -dirX * baseMagnitude * speedFactor * 0.4;
+                    vz = -dirZ * baseMagnitude * speedFactor * 0.4;
+                }
+            } else { // Reverse mode
+                if (heightRatio < 0.5) {
+                    // Lower half - generally inward and strongly upward
+                    vx = -dirX * baseMagnitude * speedFactor * 0.5;
+                    vz = -dirZ * baseMagnitude * speedFactor * 0.5;
+                } else {
+                    // Upper half - generally outward and slightly downward
+                    vx = dirX * baseMagnitude * speedFactor * 0.6;
+                    vz = dirZ * baseMagnitude * speedFactor * 0.6;
+                }
+            }
+        }
+        // Vertical velocity based on height ratio
         if (direction < 0) { // Forward mode
-            if (heightRatio < 0.5) {
-                // Lower half - generally outward and slightly upward
-                vx = dirX * baseMagnitude * speedFactor * 0.5;
-                vy = 0.005 + heightRatio * 0.01;
-                vz = dirZ * baseMagnitude * speedFactor * 0.5;
-            } else {
-                // Upper half - generally inward and slightly downward
-                vx = -dirX * baseMagnitude * speedFactor * 0.4;
-                vy = -0.005 - (1-heightRatio) * 0.01;
-                vz = -dirZ * baseMagnitude * speedFactor * 0.4;
-            }
+             vy = (heightRatio < 0.5) ? (0.005 + heightRatio * 0.01) : (-0.005 - (1-heightRatio) * 0.01);
         } else { // Reverse mode
-            if (heightRatio < 0.5) {
-                // Lower half - generally inward and strongly upward
-                vx = -dirX * baseMagnitude * speedFactor * 0.5;
-                vy = 0.01 + (0.5-heightRatio) * 0.02;
-                vz = -dirZ * baseMagnitude * speedFactor * 0.5;
-            } else {
-                // Upper half - generally outward and slightly downward
-                vx = dirX * baseMagnitude * speedFactor * 0.6;
-                vy = -0.002 - (heightRatio-0.5) * 0.005;
-                vz = dirZ * baseMagnitude * speedFactor * 0.6;
-            }
+             vy = (heightRatio < 0.5) ? (0.01 + (0.5-heightRatio) * 0.02) : (-0.002 - (heightRatio-0.5) * 0.005);
         }
     }
     
@@ -288,9 +302,15 @@ function initializeParticleVelocity(particle, fan_height, rpm, cfm, diameter) {
     vy += (Math.random() - 0.5) * turbulenceFactor;
     vz += (Math.random() - 0.5) * turbulenceFactor;
     
+    // Ensure velocities are finite numbers
+    vx = isFinite(vx) ? vx : 0;
+    vy = isFinite(vy) ? vy : 0;
+    vz = isFinite(vz) ? vz : 0;
+    
     // Set velocity
     particle.velocity = new THREE.Vector3(vx, vy, vz);
     
     // Store original velocity magnitude for color mapping
-    particle.originalSpeed = Math.sqrt(vx*vx + vy*vy + vz*vz);
+    const speedSq = vx*vx + vy*vy + vz*vz;
+    particle.originalSpeed = isFinite(speedSq) ? Math.sqrt(speedSq) : 0;
 }

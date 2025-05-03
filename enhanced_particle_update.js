@@ -1,17 +1,25 @@
 // Enhanced Particle Animation Logic
 // Based on CFD principles and visualization design
 
-function updateEnhancedParticles(deltaTime) {
-    const room_width = parseFloat(roomWidth.value);
-    const room_length = parseFloat(roomLength.value);
-    const room_height = parseFloat(roomHeight.value);
-    const fan_height_from_floor = parseFloat(fanHeight.value);
-    const diameter = parseFloat(fanDiameter.value);
+// Updates the positions and properties of particles based on physics
+function updateEnhancedParticles(particles, simParams, isMobile, deltaTime) {
+
+    // --- Validate deltaTime --- 
+    if (!isFinite(deltaTime) || deltaTime <= 0) {
+        console.warn(`Invalid deltaTime detected: ${deltaTime}. Skipping particle updates for this frame.`);
+        return; // Skip updates if deltaTime is invalid
+    }
+
+    const room_width = simParams.roomWidth;
+    const room_length = simParams.roomLength;
+    const room_height = simParams.roomHeight;
+    const fan_height_from_floor = simParams.fanHeight;
+    const diameter = simParams.fanDiameter;
     const radius = diameter / 2;
-    const rpm = parseFloat(fanRPM.value);
+    const rpm = simParams.fanRPM;
     const speedFactor = rpm / 200;
-    const direction = rotationDirection.value === 'forward' ? -1 : 1;
-    const cfm = parseFloat(fanCFM.value);
+    const direction = simParams.rotationDirection === 'forward' ? -1 : 1;
+    const cfm = simParams.fanCFM;
     const cfmFactor = cfm / 5000;
     
     // For mobile, update fewer particles per frame for better performance
@@ -25,30 +33,70 @@ function updateEnhancedParticles(deltaTime) {
         if (isMobile && i % updateFactor !== 0) continue;
         
         const particle = particles[i];
+
+        // --- Validate Velocity Before Update ---
+        if (!particle.velocity || !isFinite(particle.velocity.x) || !isFinite(particle.velocity.y) || !isFinite(particle.velocity.z)) {
+            console.warn(`Invalid velocity detected for particle ${i} before update. Resetting velocity.`, particle.velocity);
+            particle.velocity = new THREE.Vector3(0, 0, 0); // Reset to zero vector
+        }
         
         // --- CFD Principle: Apply Forces (Simplified Pressure/Entrainment) ---
         applyForces(particle, fan_height_from_floor, radius, direction, speedFactor);
+
+        // --- Validate Velocity After Forces ---
+        if (!isFinite(particle.velocity.x) || !isFinite(particle.velocity.y) || !isFinite(particle.velocity.z)) {
+            console.warn(`Invalid velocity detected for particle ${i} after applying forces. Resetting velocity.`, particle.velocity);
+            particle.velocity.set(0, 0, 0); // Reset to zero vector
+        }
         
         // --- Update Position based on Velocity ---
-        particle.position.x += particle.velocity.x * deltaTime * 60; // Scale by deltaTime
-        particle.position.y += particle.velocity.y * deltaTime * 60;
-        particle.position.z += particle.velocity.z * deltaTime * 60;
+        const deltaX = particle.velocity.x * deltaTime * 60; // Scale by deltaTime
+        const deltaY = particle.velocity.y * deltaTime * 60;
+        const deltaZ = particle.velocity.z * deltaTime * 60;
+
+        // --- Validate Position Change ---
+        if (!isFinite(deltaX) || !isFinite(deltaY) || !isFinite(deltaZ)) {
+            console.warn(`Invalid position change detected for particle ${i}. Skipping position update.`, {deltaX, deltaY, deltaZ});
+        } else {
+            particle.position.x += deltaX;
+            particle.position.y += deltaY;
+            particle.position.z += deltaZ;
+        }
+
+        // --- Validate Position After Update ---
+        if (!isFinite(particle.position.x) || !isFinite(particle.position.y) || !isFinite(particle.position.z)) {
+            console.warn(`Invalid position detected for particle ${i} after update. Resetting particle.`, particle.position);
+            resetParticle(particle, simParams); // Reset the particle entirely
+            continue; // Skip remaining updates for this particle in this frame
+        }
         
         // --- CFD Principle: Boundary Layer Effects & Wall Interaction ---
         handleBoundaryCollisions(particle, room_width, room_length, room_height, direction, speedFactor);
+
+        // --- Validate Position After Collisions ---
+        if (!isFinite(particle.position.x) || !isFinite(particle.position.y) || !isFinite(particle.position.z)) {
+            console.warn(`Invalid position detected for particle ${i} after collisions. Resetting particle.`, particle.position);
+            resetParticle(particle, simParams); // Reset the particle entirely
+            continue; // Skip remaining updates for this particle in this frame
+        }
         
-        // --- Visualization: Update Particle Trails ---
-        updateTrail(particle);
+        // --- Visualization: Update Particle Trails (Data only, rendering elsewhere) ---
+        // Ensure position is valid before adding to trail
+        if (isFinite(particle.position.x) && isFinite(particle.position.y) && isFinite(particle.position.z)) {
+            updateTrailData(particle);
+        } else {
+             console.warn(`Skipping trail update for particle ${i} due to invalid position.`, particle.position);
+        }
         
-        // --- Visualization: Velocity-Based Color Coding ---
-        updateParticleColor(particle, maxVelocity);
+        // --- Visualization: Velocity-Based Color Coding (Data/State only, rendering elsewhere) ---
+        // updateParticleColor(particle, maxVelocity); // Color update logic moved to index.html or advanced_effects.js
         
         // --- Increment Age ---
         particle.age += 1;
         
         // --- CFD Principle: Conservation of Mass/Continuity (Reset Logic) ---
         if (particle.age > particle.lifetime) {
-            resetParticle(particle, fan_height_from_floor, radius, room_width, room_length, room_height, rpm, cfm, diameter);
+            resetParticle(particle, simParams); // Pass simParams
         }
     }
 }
@@ -58,38 +106,44 @@ function applyForces(particle, fan_height, fan_radius, direction, speedFactor) {
     // Simplified Entrainment: Pull particles towards the main jet
     const dx = particle.position.x;
     const dz = particle.position.z;
-    const horizontalDistance = Math.sqrt(dx*dx + dz*dz);
+    const horizontalDistanceSq = dx*dx + dz*dz;
     const verticalDistance = particle.position.y - fan_height;
     const entrainmentStrength = 0.0005 * speedFactor;
+    const epsilon = 1e-6; // Small value to prevent division by zero
 
-    if (direction < 0) { // Forward mode (downward jet)
-        if (verticalDistance < 0 && horizontalDistance < fan_radius * 2) { // Below fan, near jet
-            // Pull towards center axis
-            const pullForce = new THREE.Vector3(-dx, 0, -dz).normalize().multiplyScalar(entrainmentStrength);
-            particle.velocity.add(pullForce);
-            // Accelerate downwards slightly
-            particle.velocity.y -= entrainmentStrength * 0.5;
+    if (horizontalDistanceSq > epsilon) { // Check if particle is not exactly at the center axis
+        const horizontalDistance = Math.sqrt(horizontalDistanceSq);
+        const normalizedPull = new THREE.Vector3(-dx / horizontalDistance, 0, -dz / horizontalDistance);
+        
+        if (direction < 0) { // Forward mode (downward jet)
+            if (verticalDistance < 0 && horizontalDistance < fan_radius * 2) { // Below fan, near jet
+                // Pull towards center axis
+                const pullForce = normalizedPull.multiplyScalar(entrainmentStrength);
+                particle.velocity.add(pullForce);
+                // Accelerate downwards slightly
+                particle.velocity.y -= entrainmentStrength * 0.5;
+            }
+        } else { // Reverse mode (upward jet)
+             if (verticalDistance > 0 && horizontalDistance < fan_radius * 2) { // Above fan, near jet
+                // Pull towards center axis
+                const pullForce = normalizedPull.multiplyScalar(entrainmentStrength);
+                particle.velocity.add(pullForce);
+                // Accelerate upwards slightly
+                particle.velocity.y += entrainmentStrength * 0.5;
+            }
         }
-    } else { // Reverse mode (upward jet)
-         if (verticalDistance > 0 && horizontalDistance < fan_radius * 2) { // Above fan, near jet
-            // Pull towards center axis
-            const pullForce = new THREE.Vector3(-dx, 0, -dz).normalize().multiplyScalar(entrainmentStrength);
-            particle.velocity.add(pullForce);
-            // Accelerate upwards slightly
-            particle.velocity.y += entrainmentStrength * 0.5;
-        }
-    }
 
-    // Simplified Pressure Gradient: Weak pull towards fan intake
-    const intakeStrength = 0.0003 * speedFactor;
-    if (direction < 0 && verticalDistance > 0) { // Forward mode, above fan
-        const pullToCenter = new THREE.Vector3(-dx, 0, -dz).normalize().multiplyScalar(intakeStrength);
-        particle.velocity.add(pullToCenter);
-        particle.velocity.y -= intakeStrength * 0.2; // Slight downward pull
-    } else if (direction > 0 && verticalDistance < 0) { // Reverse mode, below fan
-        const pullToCenter = new THREE.Vector3(-dx, 0, -dz).normalize().multiplyScalar(intakeStrength);
-        particle.velocity.add(pullToCenter);
-        particle.velocity.y += intakeStrength * 0.2; // Slight upward pull
+        // Simplified Pressure Gradient: Weak pull towards fan intake
+        const intakeStrength = 0.0003 * speedFactor;
+        if (direction < 0 && verticalDistance > 0) { // Forward mode, above fan
+            const pullToCenter = normalizedPull.multiplyScalar(intakeStrength);
+            particle.velocity.add(pullToCenter);
+            particle.velocity.y -= intakeStrength * 0.2; // Slight downward pull
+        } else if (direction > 0 && verticalDistance < 0) { // Reverse mode, below fan
+            const pullToCenter = normalizedPull.multiplyScalar(intakeStrength);
+            particle.velocity.add(pullToCenter);
+            particle.velocity.y += intakeStrength * 0.2; // Slight upward pull
+        }
     }
 }
 
@@ -97,6 +151,7 @@ function applyForces(particle, fan_height, fan_radius, direction, speedFactor) {
 function handleBoundaryCollisions(particle, room_width, room_length, room_height, direction, speedFactor) {
     const damping = 0.6; // Energy loss on collision
     const friction = 0.05; // Slowdown parallel to surface (drag)
+    const epsilon = 1e-6; // Small value to prevent division by zero
 
     // Walls (X)
     if (particle.position.x < -room_width / 2) {
@@ -143,12 +198,15 @@ function handleBoundaryCollisions(particle, room_width, room_length, room_height
         const floorWashStrength = 0.01 * speedFactor;
         const dx = particle.position.x;
         const dz = particle.position.z;
-        const horizontalDistance = Math.sqrt(dx*dx + dz*dz);
-        const dirX = dx / (horizontalDistance + 0.001);
-        const dirZ = dz / (horizontalDistance + 0.001);
-        const dirFactor = direction < 0 ? 1 : -1;
-        particle.velocity.x += dirFactor * dirX * floorWashStrength;
-        particle.velocity.z += dirFactor * dirZ * floorWashStrength;
+        const horizontalDistanceSq = dx*dx + dz*dz;
+        if (horizontalDistanceSq > epsilon) { // Check distance before dividing
+            const horizontalDistance = Math.sqrt(horizontalDistanceSq);
+            const dirX = dx / horizontalDistance;
+            const dirZ = dz / horizontalDistance;
+            const dirFactor = direction < 0 ? 1 : -1;
+            particle.velocity.x += dirFactor * dirX * floorWashStrength;
+            particle.velocity.z += dirFactor * dirZ * floorWashStrength;
+        }
     }
     
     // Ceiling
@@ -163,17 +221,20 @@ function handleBoundaryCollisions(particle, room_width, room_length, room_height
         const ceilingFlowStrength = 0.008 * speedFactor;
         const dx = particle.position.x;
         const dz = particle.position.z;
-        const horizontalDistance = Math.sqrt(dx*dx + dz*dz);
-        const dirX = dx / (horizontalDistance + 0.001);
-        const dirZ = dz / (horizontalDistance + 0.001);
-        const dirFactor = direction < 0 ? -1 : 1;
-        particle.velocity.x += dirFactor * dirX * ceilingFlowStrength;
-        particle.velocity.z += dirFactor * dirZ * ceilingFlowStrength;
+        const horizontalDistanceSq = dx*dx + dz*dz;
+        if (horizontalDistanceSq > epsilon) { // Check distance before dividing
+            const horizontalDistance = Math.sqrt(horizontalDistanceSq);
+            const dirX = dx / horizontalDistance;
+            const dirZ = dz / horizontalDistance;
+            const dirFactor = direction < 0 ? -1 : 1;
+            particle.velocity.x += dirFactor * dirX * ceilingFlowStrength;
+            particle.velocity.z += dirFactor * dirZ * ceilingFlowStrength;
+        }
     }
 }
 
-// Helper function to update particle trails
-function updateTrail(particle) {
+// Helper function to update particle trail data (positions)
+function updateTrailData(particle) {
     // Add current position to trail
     particle.trail.push(particle.position.clone());
     
@@ -181,31 +242,21 @@ function updateTrail(particle) {
     if (particle.trail.length > particle.trailLength) {
         particle.trail.shift();
     }
-    
-    // TODO: Implement actual trail rendering in the animate loop using Line geometry
-}
-
-// Helper function for velocity-based color coding
-function updateParticleColor(particle, maxVelocity) {
-    const speed = particle.velocity.length();
-    const ratio = Math.min(1, speed / maxVelocity);
-    
-    // Simple Blue -> Red gradient
-    const color = new THREE.Color();
-    color.setHSL(0.7 * (1 - ratio), 0.9, 0.6);
-    
-    particle.material.color.copy(color);
-    
-    // Optional: Adjust opacity based on age or speed
-    // particle.material.opacity = 0.5 + ratio * 0.5; 
 }
 
 // Helper function to reset particle state (position, velocity, age, etc.)
-function resetParticle(particle, fan_height, fan_radius, room_width, room_length, room_height, rpm, cfm, diameter) {
+function resetParticle(particle, simParams) { // Accept simParams
+    const fan_height = simParams.fanHeight;
+    const fan_radius = simParams.fanDiameter / 2;
+    const room_width = simParams.roomWidth;
+    const room_length = simParams.roomLength;
+    const room_height = simParams.roomHeight;
+    const direction = simParams.rotationDirection === 'forward' ? -1 : 1;
+
     // Reset particle with improved distribution logic based on CFD principles
     // Prioritize resetting near fan intake area for better continuity
     const resetType = Math.random();
-    const direction = rotationDirection.value === 'forward' ? -1 : 1;
+    let x, y, z;
 
     if (resetType < 0.6) { 
         // Reset near fan intake (above in forward, below in reverse)
@@ -213,37 +264,43 @@ function resetParticle(particle, fan_height, fan_radius, room_width, room_length
         const distance = Math.random() * fan_radius * 1.5; // Slightly wider area
         const verticalOffset = direction < 0 ? 0.5 + Math.random() * 0.5 : -0.5 - Math.random() * 0.5;
         
-        particle.position.x = Math.cos(angle) * distance;
-        particle.position.z = Math.sin(angle) * distance;
-        particle.position.y = fan_height + verticalOffset;
-        
-        // Initialize velocity towards fan blades
-        initializeParticleVelocity(particle, fan_height, rpm, cfm, diameter);
-        // Add slight pull towards blades
-        particle.velocity.y += direction * 0.01;
+        x = Math.cos(angle) * distance;
+        z = Math.sin(angle) * distance;
+        y = fan_height + verticalOffset;
         
     } else if (resetType < 0.8) {
         // Reset near walls (upper half) to represent return flow
         const wallSelection = Math.random();
-        let x, z;
         if (wallSelection < 0.25) { x = -room_width / 2 * 0.9; z = (Math.random() - 0.5) * room_length; }
         else if (wallSelection < 0.5) { x = room_width / 2 * 0.9; z = (Math.random() - 0.5) * room_length; }
         else if (wallSelection < 0.75) { x = (Math.random() - 0.5) * room_width; z = -room_length / 2 * 0.9; }
         else { x = (Math.random() - 0.5) * room_width; z = room_length / 2 * 0.9; }
         
-        particle.position.x = x;
-        particle.position.z = z;
-        particle.position.y = room_height * 0.5 + Math.random() * room_height * 0.5;
-        
-        // Initialize velocity moving away from wall, towards fan intake
-        initializeParticleVelocity(particle, fan_height, rpm, cfm, diameter);
+        y = room_height * 0.5 + Math.random() * room_height * 0.5;
         
     } else {
         // Reset randomly within the room (less frequent)
-        particle.position.x = (Math.random() - 0.5) * room_width * 0.9;
-        particle.position.z = (Math.random() - 0.5) * room_length * 0.9;
-        particle.position.y = Math.random() * room_height;
-        initializeParticleVelocity(particle, fan_height, rpm, cfm, diameter);
+        x = (Math.random() - 0.5) * room_width * 0.9;
+        z = (Math.random() - 0.5) * room_length * 0.9;
+        y = Math.random() * room_height;
+    }
+
+    // Validate calculated position before assigning
+    if (isFinite(x) && isFinite(y) && isFinite(z)) {
+        particle.position.set(x, y, z);
+    } else {
+        console.warn("NaN detected during particle reset position calculation. Resetting to center.");
+        particle.position.set(0, fan_height, 0); // Default safe position
+    }
+
+    // Initialize velocity - initializeParticleVelocity already ensures finite values
+    initializeParticleVelocity(particle, simParams); // Pass simParams
+    
+    // Add slight pull towards blades if reset near intake
+    if (resetType < 0.6) {
+        particle.velocity.y += direction * 0.01;
+        // Ensure velocity is still finite after adjustment
+        particle.velocity.y = isFinite(particle.velocity.y) ? particle.velocity.y : 0;
     }
 
     // Reset age and lifetime
@@ -253,3 +310,6 @@ function resetParticle(particle, fan_height, fan_radius, room_width, room_length
     // Reset trail
     particle.trail = [];
 }
+
+// Note: initializeParticleVelocity needs to be defined, presumably in enhanced_particles.js
+// Ensure it accepts (particle, simParams) as arguments.

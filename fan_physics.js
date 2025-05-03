@@ -267,3 +267,126 @@ function verifyFanOrientation() {
     
     console.log("Fan orientation verification complete");
 }
+
+
+// Function to initialize fan physics data
+function initializeFanPhysics() {
+    // Returns an object to hold physics state, e.g., current rotation
+    return {
+        currentRotation: 0
+    };
+}
+
+// Function to apply fan physics (rotation) in the animation loop
+function applyFanPhysics(fanObject, physicsData, simParams, deltaTime) {
+    if (!fanObject || !physicsData || !simParams) return;
+
+    const rpm = simParams.fanRPM;
+    const direction = simParams.rotationDirection === 'forward' ? -1 : 1; // -1 for clockwise (downward), 1 for counter-clockwise (upward)
+    
+    // Calculate rotation speed in radians per second
+    const rotationSpeed = (rpm * 2 * Math.PI) / 60;
+    
+    // Update current rotation based on speed, direction, and delta time
+    physicsData.currentRotation += direction * rotationSpeed * deltaTime;
+    
+    // Apply rotation to the blade group (assuming it's the 4th child: downrod, motor, hub, bladeGroup)
+    if (fanObject.children.length > 3) {
+        const bladeGroup = fanObject.children[3];
+        if (bladeGroup) {
+            bladeGroup.rotation.y = physicsData.currentRotation;
+        }
+    }
+}
+
+
+
+// Function to create the 3D fan model
+function createFanModel(simParams) {
+    const fanGroup = new THREE.Group();
+    fanGroup.name = "CeilingFan";
+
+    const fanHeight = simParams.fanHeight;
+    const roomHeight = simParams.roomHeight;
+    const fanDiameter = simParams.fanDiameter;
+    const bladeCount = simParams.bladeCount;
+    const downrodLength = simParams.downrodLength; // Assuming this is available in simParams or use a default
+
+    // Materials
+    const metalMaterial = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.8, roughness: 0.4 });
+    const bladeMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide, metalness: 0.1, roughness: 0.8 });
+
+    // Downrod (from ceiling to motor)
+    const rodHeight = Math.max(0.1, roomHeight - fanHeight - 0.5); // Adjust based on motor size
+    const rodGeometry = new THREE.CylinderGeometry(0.05, 0.05, rodHeight, 16);
+    const downrod = new THREE.Mesh(rodGeometry, metalMaterial);
+    downrod.position.y = fanHeight + 0.5 + rodHeight / 2; // Position based on fan height and motor size
+    downrod.castShadow = false; // Shadows disabled as per previous request
+    downrod.receiveShadow = false;
+    fanGroup.add(downrod);
+
+    // Motor Housing
+    const motorHeight = 0.4;
+    const motorRadius = 0.3;
+    const motorGeometry = new THREE.CylinderGeometry(motorRadius, motorRadius, motorHeight, 32);
+    const motorHousing = new THREE.Mesh(motorGeometry, metalMaterial);
+    motorHousing.position.y = fanHeight + motorHeight / 2; // Position motor just below downrod
+    motorHousing.castShadow = false;
+    motorHousing.receiveShadow = false;
+    fanGroup.add(motorHousing);
+
+    // Blade Hub
+    const hubRadius = 0.1;
+    const hubHeight = 0.1;
+    const hubGeometry = new THREE.CylinderGeometry(hubRadius, hubRadius, hubHeight, 16);
+    const bladeHub = new THREE.Mesh(hubGeometry, metalMaterial);
+    bladeHub.position.y = fanHeight; // Center of hub at fan height
+    bladeHub.castShadow = false;
+    bladeHub.receiveShadow = false;
+    fanGroup.add(bladeHub);
+
+    // Blade Group (for unified rotation)
+    const bladeGroup = new THREE.Group();
+    bladeGroup.name = "bladeGroup";
+    bladeGroup.position.y = fanHeight; // Blades rotate around the fan height axis
+    fanGroup.add(bladeGroup);
+
+    // Blades
+    const bladeLength = fanDiameter / 2 - hubRadius;
+    const bladeWidth = 0.25;
+    const bladeThickness = 0.02;
+    const bladeShape = new THREE.Shape();
+    // Simple rectangular blade shape for now, can be refined
+    bladeShape.moveTo(0, -bladeWidth / 2);
+    bladeShape.lineTo(bladeLength, -bladeWidth / 2);
+    bladeShape.lineTo(bladeLength, bladeWidth / 2);
+    bladeShape.lineTo(0, bladeWidth / 2);
+    bladeShape.lineTo(0, -bladeWidth / 2);
+
+    const extrudeSettings = {
+        steps: 1,
+        depth: bladeThickness,
+        bevelEnabled: false
+    };
+
+    const bladeGeometry = new THREE.ExtrudeGeometry(bladeShape, extrudeSettings);
+    bladeGeometry.translate(hubRadius, 0, -bladeThickness / 2); // Position relative to hub center
+    // Add slight pitch angle
+    bladeGeometry.rotateY(THREE.MathUtils.degToRad(12)); 
+
+    for (let i = 0; i < bladeCount; i++) {
+        const blade = new THREE.Mesh(bladeGeometry, bladeMaterial);
+        const angle = (i / bladeCount) * Math.PI * 2;
+        blade.rotation.y = angle;
+        blade.castShadow = false;
+        blade.receiveShadow = false;
+        bladeGroup.add(blade);
+    }
+
+    // Ensure the entire fan group is positioned correctly
+    // The components are positioned relative to fanHeight, so the group's base position is (0,0,0)
+    // fanGroup.position.y = fanHeight; // This would double the height offset
+
+    return fanGroup;
+}
+

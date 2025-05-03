@@ -21,8 +21,9 @@ function createTrailMaterials() {
     return trailMaterials;
 }
 
-// Create trail objects for each particle
-function initializeTrails(particles) {
+// Create trail objects (Line geometries) for each particle
+// Returns an object containing the array of line objects and the materials
+function initializeTrails(scene, particles) { // Added scene parameter
     const trailObjects = [];
     const trailMaterials = createTrailMaterials();
     
@@ -31,75 +32,107 @@ function initializeTrails(particles) {
         const geometry = new THREE.BufferGeometry();
         // Use the first material (most opaque) by default
         const trail = new THREE.Line(geometry, trailMaterials[0]);
-        scene.add(trail);
+        scene.add(trail); // Use scene parameter
         trailObjects.push(trail);
     }
     
-    return trailObjects;
+    // Return both the lines and the materials for updating
+    return { lines: trailObjects, materials: trailMaterials }; 
 }
 
 // Update trail geometries based on particle positions
-function updateTrails(particles, trailObjects, trailMaterials) {
+function updateTrails(particles, trailObjects, simParams, isMobile) { // Added simParams, isMobile
+    const trailLines = trailObjects.lines;
+    const trailMaterials = trailObjects.materials;
+    const rpm = simParams.fanRPM;
+    
     // For mobile, update fewer trails per frame for better performance
-    const updateFactor = isMobile ? 5 : 1;
+    const updateFactor = isMobile ? 5 : 1; // Use isMobile parameter
     
     for (let i = 0; i < particles.length; i++) {
         // On mobile, update only a subset of trails each frame
-        if (isMobile && i % updateFactor !== 0) continue;
+        if (isMobile && i % updateFactor !== 0) continue; // Use isMobile parameter
         
         const particle = particles[i];
-        const trail = trailObjects[i];
+        const trail = trailLines[i];
         
         if (particle.trail && particle.trail.length > 1) {
-            // Create points array from trail positions
+            // Create points array from trail positions and validate them
             const points = [];
+            let validPoints = true;
             for (let j = 0; j < particle.trail.length; j++) {
-                points.push(particle.trail[j]);
+                const p = particle.trail[j];
+                if (p && isFinite(p.x) && isFinite(p.y) && isFinite(p.z)) {
+                    points.push(p);
+                } else {
+                    validPoints = false;
+                    console.warn(`Invalid point detected in trail for particle ${i} at index ${j}:`, p);
+                    break; // Stop processing this trail if an invalid point is found
+                }
             }
             
-            // Update geometry with new points
-            trail.geometry.dispose(); // Clean up old geometry
-            trail.geometry = new THREE.BufferGeometry().setFromPoints(points);
-            
-            // Set material based on particle velocity (for color coding)
-            const speed = particle.velocity.length();
-            const maxVelocity = 0.15 * (1 + parseFloat(fanRPM.value) / 200 * 0.5);
-            const ratio = Math.min(1, speed / maxVelocity);
-            
-            // Get material index based on velocity (faster = more vibrant)
-            const materialIndex = Math.min(9, Math.floor((1 - ratio) * 10));
-            trail.material = trailMaterials[materialIndex];
-            
-            // Set color based on velocity (blue -> cyan -> green -> yellow -> red)
-            const color = new THREE.Color();
-            color.setHSL(0.7 * (1 - ratio), 0.9, 0.6);
-            trail.material.color.copy(color);
+            // Only update geometry if all points are valid and there are enough points
+            if (validPoints && points.length > 1) {
+                // Update geometry with new points
+                trail.geometry.dispose(); // Clean up old geometry
+                trail.geometry = new THREE.BufferGeometry().setFromPoints(points);
+                
+                // Set material based on particle velocity (for color coding)
+                const speed = particle.velocity.length();
+                const maxVelocity = 0.15 * (1 + rpm / 200 * 0.5); // Use rpm from simParams
+                const ratio = Math.min(1, speed / (maxVelocity + 1e-6)); // Add epsilon to prevent division by zero
+                
+                // Get material index based on velocity (faster = more vibrant)
+                const materialIndex = Math.min(trailMaterials.length - 1, Math.floor((1 - ratio) * trailMaterials.length));
+                trail.material = trailMaterials[materialIndex];
+                
+                // Set color based on velocity (blue -> cyan -> green -> yellow -> red)
+                const color = new THREE.Color();
+                color.setHSL(0.7 * (1 - ratio), 0.9, 0.6);
+                trail.material.color.copy(color);
+                
+                // Make trail visible
+                trail.visible = true;
+            } else {
+                // Hide trail if points are invalid or not enough points
+                trail.visible = false;
+            }
+        } else {
+            // Hide trail if not enough points
+            trail.visible = false;
         }
     }
 }
 
 // Clean up trails when resetting simulation
-function cleanupTrails(trailObjects) {
-    for (let i = 0; i < trailObjects.length; i++) {
-        scene.remove(trailObjects[i]);
-        trailObjects[i].geometry.dispose();
-        trailObjects[i].material.dispose();
+function cleanupTrails(scene, trailObjects) { // Added scene parameter
+    if (trailObjects && trailObjects.lines) {
+        for (let i = 0; i < trailObjects.lines.length; i++) {
+            const trail = trailObjects.lines[i];
+            scene.remove(trail); // Use scene parameter
+            trail.geometry.dispose();
+            // Materials are shared, dispose them separately if needed, but usually not required
+            // if (trail.material) trail.material.dispose(); 
+        }
     }
-    return [];
+    // Return an empty structure
+    return { lines: [], materials: [] }; 
 }
 
 // Add velocity-based particle size variation
-function updateParticleSizes(particles) {
+function updateParticleSizes(particles, simParams, isMobile) { // Added simParams, isMobile
+    const rpm = simParams.fanRPM;
+    
     // For mobile, update fewer particles per frame for better performance
-    const updateFactor = isMobile ? 3 : 1;
+    const updateFactor = isMobile ? 3 : 1; // Use isMobile parameter
     
     for (let i = 0; i < particles.length; i++) {
         // On mobile, update only a subset of particles each frame
-        if (isMobile && i % updateFactor !== 0) continue;
+        if (isMobile && i % updateFactor !== 0) continue; // Use isMobile parameter
         
         const particle = particles[i];
         const speed = particle.velocity.length();
-        const maxVelocity = 0.15 * (1 + parseFloat(fanRPM.value) / 200 * 0.5);
+        const maxVelocity = 0.15 * (1 + rpm / 200 * 0.5); // Use rpm from simParams
         const ratio = Math.min(1, speed / maxVelocity);
         
         // Faster particles are slightly larger (1.0 to 1.5 times base size)
@@ -109,13 +142,13 @@ function updateParticleSizes(particles) {
 }
 
 // Add pulsing effect to particles based on age
-function addPulsingEffect(particles) {
+function addPulsingEffect(particles, isMobile) { // Added isMobile
     // For mobile, update fewer particles per frame for better performance
-    const updateFactor = isMobile ? 3 : 1;
+    const updateFactor = isMobile ? 3 : 1; // Use isMobile parameter
     
     for (let i = 0; i < particles.length; i++) {
         // On mobile, update only a subset of particles each frame
-        if (isMobile && i % updateFactor !== 0) continue;
+        if (isMobile && i % updateFactor !== 0) continue; // Use isMobile parameter
         
         const particle = particles[i];
         

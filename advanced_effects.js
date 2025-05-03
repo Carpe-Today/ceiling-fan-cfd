@@ -1,20 +1,20 @@
 // Additional Visual Effects for Enhanced CFD Simulation
 
 // Create heat map visualization for floor and ceiling
-function createHeatMapVisualization() {
+function createHeatMapVisualization(scene, simParams) { // Added scene, simParams
     // Create grid of points for heat map
     const gridSize = 20; // 20x20 grid
-    const room_width = parseFloat(roomWidth.value);
-    const room_length = parseFloat(roomLength.value);
-    const room_height = parseFloat(roomHeight.value);
+    const room_width = simParams.roomWidth;
+    const room_length = simParams.roomLength;
+    const room_height = simParams.roomHeight;
     
     // Create floor heat map
     const floorHeatMap = createHeatMapMesh(gridSize, room_width, room_length, 0.01); // Just above floor
-    scene.add(floorHeatMap);
+    scene.add(floorHeatMap); // Use scene parameter
     
     // Create ceiling heat map
     const ceilingHeatMap = createHeatMapMesh(gridSize, room_width, room_length, room_height - 0.01); // Just below ceiling
-    scene.add(ceilingHeatMap);
+    scene.add(ceilingHeatMap); // Use scene parameter
     
     return { floorHeatMap, ceilingHeatMap };
 }
@@ -48,13 +48,13 @@ function createHeatMapMesh(gridSize, width, length, height) {
     }
     
     // Add color attribute to geometry
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     
     return mesh;
 }
 
 // Update heat maps based on particle positions and velocities
-function updateHeatMaps(heatMaps, particles) {
+function updateHeatMaps(heatMaps, particles, simParams) { // Added particles, simParams
     const { floorHeatMap, ceilingHeatMap } = heatMaps;
     
     // Reset heat values
@@ -62,8 +62,9 @@ function updateHeatMaps(heatMaps, particles) {
     const ceilingHeat = new Array(ceilingHeatMap.geometry.attributes.position.count).fill(0);
     
     // Get room dimensions
-    const room_width = parseFloat(roomWidth.value);
-    const room_length = parseFloat(roomLength.value);
+    const room_width = simParams.roomWidth;
+    const room_length = simParams.roomLength;
+    const room_height = simParams.roomHeight;
     const gridSize = Math.sqrt(floorHeatMap.geometry.attributes.position.count);
     
     // Calculate heat contribution from each particle
@@ -86,7 +87,6 @@ function updateHeatMaps(heatMaps, particles) {
         }
         
         // Ceiling heat map contribution (particles near ceiling)
-        const room_height = parseFloat(roomHeight.value);
         if (particle.position.y > room_height - 0.5) {
             // Convert particle position to grid coordinates
             const gridX = Math.floor((particle.position.x + room_width/2) / room_width * (gridSize-1));
@@ -130,14 +130,21 @@ function updateHeatMapColors(heatMap, heatValues) {
     heatMap.geometry.attributes.color.needsUpdate = true;
 }
 
-// Create turbulence visualization (small random movements)
-function addTurbulenceVisualization(particles) {
+// Create turbulence visualization (placeholder, actual update in updateTurbulenceVisualization)
+function createTurbulenceVisualization(scene) { // Added scene parameter
+    // Placeholder: Maybe create a group or helper object if needed
+    // For now, just return a simple object or null
+    return null; // Or new THREE.Group(); if you plan to add visual elements
+}
+
+// Update turbulence visualization (small random movements)
+function updateTurbulenceVisualization(turbulenceVisualization, particles, isMobile) { // Added particles, isMobile
     // For mobile, update fewer particles per frame for better performance
-    const updateFactor = isMobile ? 3 : 1;
+    const updateFactor = isMobile ? 3 : 1; // Use isMobile parameter
     
     for (let i = 0; i < particles.length; i++) {
         // On mobile, update only a subset of particles each frame
-        if (isMobile && i % updateFactor !== 0) continue;
+        if (isMobile && i % updateFactor !== 0) continue; // Use isMobile parameter
         
         const particle = particles[i];
         const speed = particle.velocity.length();
@@ -152,19 +159,28 @@ function addTurbulenceVisualization(particles) {
     }
 }
 
-// Create vortex visualization for fan tips
-function createVortexVisualization(fan, particles) {
+// Create vortex visualization (placeholder, actual update in updateVortexVisualization)
+function createVortexVisualization(scene) { // Added scene parameter
+    // Placeholder: Maybe create a group or helper object if needed
+    // For now, just return a simple object or null
+    return null; // Or new THREE.Group(); if you plan to add visual elements
+}
+
+// Update vortex visualization for fan tips
+function updateVortexVisualization(vortexVisualization, fan, particles, simParams, isMobile) { // Added fan, particles, simParams, isMobile
     // Only apply to particles near blade tips
-    const fan_height = parseFloat(fanHeight.value);
-    const diameter = parseFloat(fanDiameter.value);
+    const fan_height = simParams.fanHeight;
+    const diameter = simParams.fanDiameter;
     const radius = diameter / 2;
+    const rpm = simParams.fanRPM;
+    const direction = simParams.rotationDirection === "forward" ? -1 : 1;
     
     // For mobile, update fewer particles per frame for better performance
-    const updateFactor = isMobile ? 3 : 1;
+    const updateFactor = isMobile ? 3 : 1; // Use isMobile parameter
     
     for (let i = 0; i < particles.length; i++) {
         // On mobile, update only a subset of particles each frame
-        if (isMobile && i % updateFactor !== 0) continue;
+        if (isMobile && i % updateFactor !== 0) continue; // Use isMobile parameter
         
         const particle = particles[i];
         
@@ -177,17 +193,50 @@ function createVortexVisualization(fan, particles) {
         if (horizontalDistance > radius * 0.7 && horizontalDistance < radius * 1.3 && verticalDistance < 0.3) {
             // Add spiral motion to particle
             const angle = Math.atan2(dz, dx);
-            const spiralStrength = 0.001 * parseFloat(fanRPM.value) / 100;
+            const spiralStrength = 0.001 * rpm / 100;
             
             // Tangential component
             particle.position.x += -Math.sin(angle) * spiralStrength;
             particle.position.z += Math.cos(angle) * spiralStrength;
             
             // Slight inward/outward component based on rotation direction
-            const direction = rotationDirection.value === 'forward' ? -1 : 1;
             const radialStrength = 0.0005;
             particle.position.x += dx / horizontalDistance * radialStrength * direction;
             particle.position.z += dz / horizontalDistance * radialStrength * direction;
         }
+    }
+}
+
+// Function to update particle colors based on selected scheme
+function updateParticleColorsBasedOnScheme(particles, simParams) { // Added function
+    const scheme = simParams.colorScheme;
+    const rpm = simParams.fanRPM;
+    const maxVelocity = 0.15 * (1 + rpm / 200 * 0.5);
+
+    for (let i = 0; i < particles.length; i++) {
+        const particle = particles[i];
+        const speed = particle.velocity.length();
+        const ratio = Math.min(1, speed / maxVelocity);
+        const color = new THREE.Color();
+
+        switch (scheme) {
+            case "velocity":
+                // Blue -> Red gradient based on speed
+                color.setHSL(0.7 * (1 - ratio), 0.9, 0.6);
+                break;
+            case "age":
+                // Green -> Yellow -> Red based on age/lifetime ratio
+                const ageRatio = particle.age / particle.lifetime;
+                color.setHSL(0.3 + ageRatio * 0.7, 0.9, 0.6);
+                break;
+            case "height":
+                // Blue (floor) -> Green (mid) -> Red (ceiling) based on height
+                const heightRatio = particle.position.y / simParams.roomHeight;
+                color.setHSL(0.7 - heightRatio * 0.7, 0.9, 0.6);
+                break;
+            default: // Default to velocity
+                color.setHSL(0.7 * (1 - ratio), 0.9, 0.6);
+        }
+        particle.material.color.copy(color);
     }
 }
